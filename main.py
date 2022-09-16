@@ -1,10 +1,14 @@
 import aiohttp
 import asyncio
 import os 
+import pymorphy2
 import logging
+
+from requests import request
+import requests
 from adapters.inosmi_ru import sanitize
 from adapters.exceptions import ArticleNotFound
-from text_tools import check_text_for_jaundicity
+from text_tools import split_by_words, calculate_jaundice_rate
 from anyio import create_task_group
 import aiofiles
 from enum import Enum
@@ -14,9 +18,9 @@ from contextlib import contextmanager
 import time
 
 
-TEST_ARTICLES = ['http://inosmi.ru/economic/20190629/245384784.html', 'https://inosmi.ru/politic/20190629/245379332.html', 'https://dvmn.org/media/filer_public/51/83/51830f54-7ec7-4702-847b-c5790ed3724c/gogol_nikolay_taras_bulba_-_bookscafenet.txt']
+TEST_ARTICLES = ['http://inosmi.ru/economic/20190629/245384784.html', 'https://inosmi.ru/politic/20190629/245379332.html']
 URL_FETCH_DELAY = 5
-
+TEXT_ANALISIS_DELAY = 3
 logger = logging.getLogger(__name__)
 
 class ProcessingStatus(Enum):
@@ -28,8 +32,14 @@ class ProcessingStatus(Enum):
 
 @contextmanager
 def log_duration(logger, url):
-    start = time.monotonic()
-    yield
+    try:
+        start = time.monotonic()
+        yield
+    except asyncio.exceptions.TimeoutError as err:
+        duration = round(time.monotonic() - start, 2)
+        logger.info(f'Анализ статьи {url} закончен за {duration} сек')
+        raise err
+
     duration = round(time.monotonic() - start, 2)
     logger.info(f'Анализ статьи {url} закончен за {duration} сек')
 
@@ -54,23 +64,33 @@ async def fetch_charged_words(directory='charged_list'):
     return charged_words
 
 
+async def check_text_for_jaundicity(text, charged_words):
+    morph = pymorphy2.MorphAnalyzer()
+    async with timeout(TEXT_ANALISIS_DELAY):
+        splitted_text = await split_by_words(morph, text)
+    status = ProcessingStatus.OK.name
+    rate = calculate_jaundice_rate(splitted_text, charged_words)
+    article_len = len(splitted_text)
+    return status, rate, article_len
+
+
 async def process_article(session, charged_words, url, title, jaundicity_results):
     rate = None
     article_len = None  
     try:
         async with timeout(URL_FETCH_DELAY):
             html = await fetch(session, url)
+
+        with log_duration(logger, url):
+            sanitized_text = sanitize(html, plaintext=True)
+            status, rate, article_len = await check_text_for_jaundicity(sanitized_text, charged_words)
     except asyncio.exceptions.TimeoutError:
         status = ProcessingStatus.TIMEOUT.name
     except aiohttp.ClientError:
         status = ProcessingStatus.FETCH_ERROR.name
     except ArticleNotFound:
         status = ProcessingStatus.PARSING_ERROR.name
-    else:
-        with log_duration(logger, url):
-            sanitized_text = sanitize(html, plaintext=True)
-            rate, article_len = check_text_for_jaundicity(sanitized_text, charged_words)
-        status = ProcessingStatus.OK.name
+        
     jaundicity_results.append(
         {
             'Статус': status,
