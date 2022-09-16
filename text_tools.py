@@ -46,3 +46,11 @@ def calculate_jaundice_rate(article_words, charged_words):
 def test_calculate_jaundice_rate():
     assert -0.01 < calculate_jaundice_rate([], []) < 0.01
     assert 33.0 < calculate_jaundice_rate(['все', 'аутсайдер', 'побег'], ['аутсайдер', 'банкротство']) < 34.0
+
+
+def check_text_for_jaundicity(text, charged_words):
+    morph = pymorphy2.MorphAnalyzer()
+    splitted_text = split_by_words(morph, text)
+    rate = calculate_jaundice_rate(splitted_text, charged_words)
+    article_len = len(splitted_text)
+    return rate, article_len

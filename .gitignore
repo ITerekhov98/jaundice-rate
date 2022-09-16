@@ -1,0 +1,4 @@
+charged_list
+.*
+!.gitignore
+__*
