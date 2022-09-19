@@ -12,16 +12,27 @@ from contextlib import contextmanager
 import time
 from aiohttp import web
 from functools import partial
-
+import pymorphy2
+from dataclasses import dataclass, asdict
+from typing import Optional
+import pytest
 
 URL_FETCH_DELAY = 5
 logger = logging.getLogger(__name__)
+
 
 class ProcessingStatus(Enum):
     OK = 'OK'
     FETCH_ERROR = 'FETCH_ERROR'
     PARSING_ERROR = 'PARSING_ERROR'
     TIMEOUT = 'TIMEOUT'
+
+@dataclass
+class ArticleReport():
+    url: str
+    status_code: str
+    rate: Optional[float] = None
+    length: Optional[int] = None
 
 
 @contextmanager
@@ -39,7 +50,7 @@ def log_duration(logger, url):
 
 
 async def fetch(session, url):
-    if urlparse(url).hostname != 'inosmi.ru':
+    if urlparse(url).hostname not in ('inosmi.ru', 'dvmn.org'):
         raise ArticleNotFound()
 
     async with session.get(url) as response:
@@ -47,12 +58,11 @@ async def fetch(session, url):
         return await response.text()
 
 
-
-async def process_article(session, charged_words, url, title, jaundicity_results):
+async def process_article(session, charged_words, url, title, jaundicity_results, fetch_delay=URL_FETCH_DELAY):
     rate = None
     article_len = None  
     try:
-        async with timeout(URL_FETCH_DELAY):
+        async with timeout(fetch_delay):
             html = await fetch(session, url)
 
         with log_duration(logger, url):
@@ -68,26 +78,51 @@ async def process_article(session, charged_words, url, title, jaundicity_results
         status = ProcessingStatus.OK.name
         
     jaundicity_results.append(
-        {
-            'Статус': status,
-            'URL:': title,
-            'Рейтинг:': rate,
-            'Слов в статье:': article_len
-        }
+        ArticleReport(
+            title,
+            status,
+            rate,
+            article_len
+        )
     )
+
+@pytest.mark.asyncio
+async def test_process_article():
+    charged_words = fetch_charged_words()
+    async with aiohttp.ClientSession() as session:
+        url = 'https://lenta.ru/brief/2021/08/26/afg_terror/'
+        jaundicity_results = []
+        await process_article(session, charged_words, url, url, jaundicity_results)
+        assert jaundicity_results[0] == ArticleReport(url, ProcessingStatus.PARSING_ERROR.name)
+
+        url = 'https://inosmi.ru/not/exist.html'
+        jaundicity_results = []
+        await process_article(session, charged_words, url, url, jaundicity_results)
+        assert jaundicity_results[0] == ArticleReport(url, ProcessingStatus.FETCH_ERROR.name)
+
+        url = 'https://inosmi.ru/politic/20190629/245379332.html'
+        jaundicity_results = []
+        await process_article(session, charged_words, url, url, jaundicity_results, 0.1)
+        assert jaundicity_results[0] == ArticleReport(url, ProcessingStatus.TIMEOUT.name)
 
 
 async def handle_request(request, charged_words):
     urls = request.query.get('urls')
     if not urls:
         raise web.HTTPBadRequest()
-
+    urls = urls.split(',')
+    if len(urls) > 10:
+        return web.json_response(
+            {"error": "too many urls in request, should be 10 or less"},
+            status=400
+        )
     jaundicity_results = []
     async with aiohttp.ClientSession() as session:
         async with create_task_group() as tg:
-            for url in urls.split(','):
+            for url in urls:
                 tg.start_soon(process_article, session, charged_words, url, url, jaundicity_results)
-    return web.json_response(jaundicity_results)
+    response = [asdict(report) for report in jaundicity_results]
+    return web.json_response(response)
 
 
 if __name__ == '__main__':
@@ -97,7 +132,6 @@ if __name__ == '__main__':
     )
     app = web.Application()
     charged_words = fetch_charged_words()
-    print(len(charged_words))
     app.add_routes([web.get('/', partial(handle_request, charged_words=charged_words))])
     web.run_app(app)
 
