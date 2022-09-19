@@ -16,6 +16,8 @@
 pip install -r requirements.txt
 ```
 
+Создайте каталог charged_list и положите в него текстовые файлы с триггерными словами. [Пример](https://dvmn.org/filer/canonical/1561981914/163/).
+
 # Как запустить сервер
 
 ```python3
