@@ -2,6 +2,11 @@ import asyncio
 import pymorphy2
 import string
 import pytest
+from async_timeout import timeout
+import os
+
+TEXT_ANALISIS_DELAY = 3
+
 
 def _clean_word(word):
     word = word.replace('«', '').replace('»', '').replace('…', '')
@@ -52,4 +57,21 @@ def test_calculate_jaundice_rate():
     assert 33.0 < calculate_jaundice_rate(['все', 'аутсайдер', 'побег'], ['аутсайдер', 'банкротство']) < 34.0
 
 
+async def check_text_for_jaundicity(text, charged_words):
+    morph = pymorphy2.MorphAnalyzer()
+    async with timeout(TEXT_ANALISIS_DELAY):
+        splitted_text = await split_by_words(morph, text)
+    rate = calculate_jaundice_rate(splitted_text, charged_words)
+    article_len = len(splitted_text)
+    return rate, article_len
 
+
+def fetch_charged_words(directory='charged_list'):
+    charged_words = []
+    for root, dirs, charged_lists in os.walk(directory):
+        for charged_list in charged_lists:
+            path_list = f'{root}/{charged_list}'
+            with open(path_list) as f:
+                words = f.read()
+                charged_words.extend(words.split())
+    return charged_words

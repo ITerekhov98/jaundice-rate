@@ -1,26 +1,20 @@
 import aiohttp
 import asyncio
-import os 
-import pymorphy2
 import logging
-
-from requests import request
-import requests
 from adapters.inosmi_ru import sanitize
 from adapters.exceptions import ArticleNotFound
-from text_tools import split_by_words, calculate_jaundice_rate
+from text_tools import check_text_for_jaundicity, fetch_charged_words
 from anyio import create_task_group
-import aiofiles
 from enum import Enum
 from urllib.parse import urlparse
 from async_timeout import timeout
 from contextlib import contextmanager
 import time
+from aiohttp import web
+from functools import partial
 
 
-TEST_ARTICLES = ['http://inosmi.ru/economic/20190629/245384784.html', 'https://inosmi.ru/politic/20190629/245379332.html']
 URL_FETCH_DELAY = 5
-TEXT_ANALISIS_DELAY = 3
 logger = logging.getLogger(__name__)
 
 class ProcessingStatus(Enum):
@@ -53,26 +47,6 @@ async def fetch(session, url):
         return await response.text()
 
 
-async def fetch_charged_words(directory='charged_list'):
-    charged_words = []
-    for root, dirs, charged_lists in os.walk(directory):
-        for charged_list in charged_lists:
-            path_list = f'{root}/{charged_list}'
-            async with aiofiles.open(path_list) as f:
-                words = await f.read()
-                charged_words.extend(words.split())
-    return charged_words
-
-
-async def check_text_for_jaundicity(text, charged_words):
-    morph = pymorphy2.MorphAnalyzer()
-    async with timeout(TEXT_ANALISIS_DELAY):
-        splitted_text = await split_by_words(morph, text)
-    status = ProcessingStatus.OK.name
-    rate = calculate_jaundice_rate(splitted_text, charged_words)
-    article_len = len(splitted_text)
-    return status, rate, article_len
-
 
 async def process_article(session, charged_words, url, title, jaundicity_results):
     rate = None
@@ -83,13 +57,15 @@ async def process_article(session, charged_words, url, title, jaundicity_results
 
         with log_duration(logger, url):
             sanitized_text = sanitize(html, plaintext=True)
-            status, rate, article_len = await check_text_for_jaundicity(sanitized_text, charged_words)
+            rate, article_len = await check_text_for_jaundicity(sanitized_text, charged_words)
     except asyncio.exceptions.TimeoutError:
         status = ProcessingStatus.TIMEOUT.name
     except aiohttp.ClientError:
         status = ProcessingStatus.FETCH_ERROR.name
     except ArticleNotFound:
         status = ProcessingStatus.PARSING_ERROR.name
+    else:
+        status = ProcessingStatus.OK.name
         
     jaundicity_results.append(
         {
@@ -101,19 +77,27 @@ async def process_article(session, charged_words, url, title, jaundicity_results
     )
 
 
-async def main():
+async def handle_request(request, charged_words):
+    urls = request.query.get('urls')
+    if not urls:
+        raise web.HTTPBadRequest()
+
+    jaundicity_results = []
+    async with aiohttp.ClientSession() as session:
+        async with create_task_group() as tg:
+            for url in urls.split(','):
+                tg.start_soon(process_article, session, charged_words, url, url, jaundicity_results)
+    return web.json_response(jaundicity_results)
+
+
+if __name__ == '__main__':
     logging.basicConfig(
         format='%(levelname)s : %(message)s',
         level=logging.INFO
     )
-    jaundicity_results = []
-    charged_words = await fetch_charged_words()
-    async with aiohttp.ClientSession() as session:
-        async with create_task_group() as tg:
-            for url in TEST_ARTICLES:
-                tg.start_soon(process_article, session, charged_words, url, url, jaundicity_results)
-    for result in jaundicity_results:
-        print(result)
+    app = web.Application()
+    charged_words = fetch_charged_words()
+    print(len(charged_words))
+    app.add_routes([web.get('/', partial(handle_request, charged_words=charged_words))])
+    web.run_app(app)
 
-
-asyncio.run(main())
