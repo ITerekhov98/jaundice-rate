@@ -1,9 +1,10 @@
 import asyncio
+import os
+import pytest
+
 import pymorphy2
 import string
-import pytest
 from async_timeout import timeout
-import os
 
 TEXT_ANALISIS_DELAY = 3
 
@@ -34,18 +35,23 @@ async def test_split_by_words():
     # Старайтесь организовать свой код так, чтоб создавать экземпляр MorphAnalyzer заранее и в единственном числе
     morph = pymorphy2.MorphAnalyzer()
 
-    assert await split_by_words(morph, 'Во-первых, он хочет, чтобы') == ['во-первых', 'хотеть', 'чтобы']
+    splitted = await split_by_words(morph, 'Во-первых, он хочет, чтобы')
+    assert splitted == ['во-первых', 'хотеть', 'чтобы']
 
-    assert await split_by_words(morph, '«Удивительно, но это стало началом!»') == ['удивительно', 'это', 'стать', 'начало']
+    splitted = await split_by_words(morph, '«Удивительно, но это стало началом!»')
+    assert splitted == ['удивительно', 'это', 'стать', 'начало']
 
 
 def calculate_jaundice_rate(article_words, charged_words):
-    """Расчитывает желтушность текста, принимает список "заряженных" слов и ищет их внутри article_words."""
+    """Расчитывает желтушность текста,
+    принимает список "заряженных" слов и ищет их внутри article_words."""
 
     if not article_words:
         return 0.0
 
-    found_charged_words = [word for word in article_words if word in set(charged_words)]
+    found_charged_words = [
+        word for word in article_words if word in set(charged_words)
+    ]
 
     score = len(found_charged_words) / len(article_words) * 100
 
@@ -54,16 +60,10 @@ def calculate_jaundice_rate(article_words, charged_words):
 
 def test_calculate_jaundice_rate():
     assert -0.01 < calculate_jaundice_rate([], []) < 0.01
-    assert 33.0 < calculate_jaundice_rate(['все', 'аутсайдер', 'побег'], ['аутсайдер', 'банкротство']) < 34.0
-
-
-async def check_text_for_jaundicity(text, charged_words):
-    morph = pymorphy2.MorphAnalyzer()
-    async with timeout(TEXT_ANALISIS_DELAY):
-        splitted_text = await split_by_words(morph, text)
-    rate = calculate_jaundice_rate(splitted_text, charged_words)
-    article_len = len(splitted_text)
-    return rate, article_len
+    assert 33.0 < calculate_jaundice_rate(
+        ['все', 'аутсайдер', 'побег'],
+        ['аутсайдер', 'банкротство']
+        ) < 34.0
 
 
 def fetch_charged_words(directory='charged_list'):
@@ -75,3 +75,12 @@ def fetch_charged_words(directory='charged_list'):
                 words = f.read()
                 charged_words.extend(words.split())
     return charged_words
+
+
+async def check_text_for_jaundicity(text, charged_words):
+    morph = pymorphy2.MorphAnalyzer()
+    async with timeout(TEXT_ANALISIS_DELAY):
+        splitted_text = await split_by_words(morph, text)
+    rate = calculate_jaundice_rate(splitted_text, charged_words)
+    article_len = len(splitted_text)
+    return rate, article_len
