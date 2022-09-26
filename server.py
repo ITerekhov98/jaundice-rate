@@ -11,7 +11,7 @@ from text_tools import fetch_charged_words
 
 
 async def handle_request(request, charged_words):
-    urls = request.query.get('urls')
+    urls = request.query.get('urls', '').strip()
     if not urls:
         raise web.HTTPBadRequest()
     urls = urls.split(',')

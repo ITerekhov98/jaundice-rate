@@ -12,11 +12,11 @@ from enum import Enum
 from async_timeout import timeout
 
 from adapters.inosmi_ru import sanitize
-from adapters.exceptions import ArticleNotFound
+from adapters.exceptions import ArticleNotFound, AdapterNotFound
 from text_tools import check_text_for_jaundicity, fetch_charged_words
 
 
-URL_FETCH_DELAY = 5
+FETCH_URL_TIMEOUT = 5
 logger = logging.getLogger(__name__)
 
 
@@ -37,14 +37,17 @@ class ArticleReport():
 
 
 @contextmanager
-def log_duration(logger, url):
+def record_the_duration(logger, url):
     try:
         start = time.monotonic()
         yield
-    except asyncio.exceptions.TimeoutError as err:
+    except asyncio.exceptions.TimeoutError:
         duration = round(time.monotonic() - start, 2)
-        logger.info(f'Анализ статьи {url} закончен за {duration} сек')
-        raise err
+        logger.warning(
+            f'Превышен лимит времени выполнения! '
+             'Анализ статьи {url} прекращён. Время выполнения: '
+             '{duration} сек')
+        raise 
 
     duration = round(time.monotonic() - start, 2)
     logger.info(f'Анализ статьи {url} закончен за {duration} сек')
@@ -52,7 +55,7 @@ def log_duration(logger, url):
 
 async def fetch(session, url):
     if urlparse(url).hostname not in ('inosmi.ru', 'dvmn.org'):
-        raise ArticleNotFound()
+        raise AdapterNotFound()
 
     async with session.get(url) as response:
         response.raise_for_status()
@@ -64,7 +67,7 @@ async def process_article(
         charged_words,
         url,
         jaundicity_results,
-        fetch_delay=URL_FETCH_DELAY):
+        fetch_delay=FETCH_URL_TIMEOUT):
 
     rate = None
     article_len = None
@@ -72,7 +75,7 @@ async def process_article(
         async with timeout(fetch_delay):
             html = await fetch(session, url)
 
-        with log_duration(logger, url):
+        with record_the_duration(logger, url):
             sanitized_text = sanitize(html, plaintext=True)
             rate, article_len = await check_text_for_jaundicity(
                 sanitized_text,
@@ -82,7 +85,7 @@ async def process_article(
         status = ProcessingStatus.TIMEOUT.name
     except aiohttp.ClientError:
         status = ProcessingStatus.FETCH_ERROR.name
-    except ArticleNotFound:
+    except (ArticleNotFound, AdapterNotFound):
         status = ProcessingStatus.PARSING_ERROR.name
     else:
         status = ProcessingStatus.OK.name
